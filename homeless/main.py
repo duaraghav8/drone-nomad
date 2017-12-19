@@ -64,7 +64,7 @@ def _merge(base, extras):
                     'Conflicting values at "{}", list type can override only empty values or lists'.format(key))
             continue
 
-        if not isinstance(extras[key], (dict, str, unicode, int, float, bool, bytes, type(None))):
+        if not isinstance(extras[key], (dict, str, int, float, bool, bytes, type(None))):
             raise Exception('Overrides must only contain scalar or dictionary values. Unsupported type {} on {}'.format(
                 str(type(extras[key])), key))
 
