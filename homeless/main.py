@@ -8,15 +8,16 @@ from .config import build_config, NOMAD_BIN_PATH
 in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
 
 
-def _get_client(service, role, region, session_name):
+def _get_client(service, role, region, session_name, resource=None):
     sts = boto3.client('sts', region_name=region)
     creds = sts.assume_role(RoleArn=role, RoleSessionName='{}-{}'.format(session_name, service)).get('Credentials')
 
-    return boto3.client(service,
-                        aws_access_key_id=creds.get('AccessKeyId'),
-                        aws_secret_access_key=creds.get('SecretAccessKey'),
-                        aws_session_token=creds.get('SessionToken'),
-                        region_name=region)
+    kind = boto3.resource if resource else boto3.client
+    return kind(service,
+                aws_access_key_id=creds.get('AccessKeyId'),
+                aws_secret_access_key=creds.get('SecretAccessKey'),
+                aws_session_token=creds.get('SessionToken'),
+                region_name=region)
 
 
 def _load_job_spec(job):
@@ -58,7 +59,8 @@ def _merge(base, extras):
             elif isinstance(base[key], list):
                 base[key].extend(extras[key])
             else:
-                raise Exception('Conflicting values at "{}", list type can override only empty values or lists'.format(key))
+                raise Exception(
+                    'Conflicting values at "{}", list type can override only empty values or lists'.format(key))
             continue
 
         if not isinstance(extras[key], (dict, str, unicode, int, float, bool, bytes, type(None))):
@@ -256,7 +258,7 @@ def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
     if in_local_mode:
         return DumbTable(table_name)
     else:
-        client = _get_client('dynamodb', iam_role, region, session_prefix)
+        client = _get_client('dynamodb', iam_role, region, session_prefix, resource=True)
         return client.Table(table_name)
 
 
