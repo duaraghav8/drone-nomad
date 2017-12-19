@@ -230,7 +230,7 @@ def _get_lambda_client(func, iam_role_arn, region, session_name):
 
     def _lambda(client):
         def _client_wrapper(**kwargs):
-            response = client.invoke(FunctionName=func, Payload=kwargs)
+            response = client.invoke(FunctionName=func, Payload=json.dumps(kwargs).encode())
             if response['StatusCode'] != 200:
                 raise Exception('Lambda invocation failure: {}'.format(response['Payload'].read()))
 
