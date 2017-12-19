@@ -306,4 +306,5 @@ if __name__ == '__main__':
     logger('Environment')
     [logger('{} = {}'.format(k, v)) for k, v in os.environ.items()]
 
+    del config['verbose']
     entrypoint(**config)
