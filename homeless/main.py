@@ -6,6 +6,7 @@ from os import path, getenv
 from .config import build_config, NOMAD_BIN_PATH
 
 in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
+logger = None
 
 
 def _get_client(service, role, region, session_name, resource=None):
@@ -288,6 +289,21 @@ def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, 
         _promote_canaries(lambda_client, job_spec, eval_id)
 
 
+def get_logger(verbose):
+    def _l(msg):
+        if verbose:
+            print(' +' + msg)
+    return _l
+
+
 if __name__ == '__main__':
+    import os
     config = build_config()
+
+    logger = get_logger(config['verbose'])
+    logger('Configuration:')
+    [logger('{} = {}'.format(k, v)) for k, v in config.items()]
+    logger('Environment')
+    [logger('{} = {}'.format(k, v)) for k, v in os.environ.items()]
+
     entrypoint(**config)

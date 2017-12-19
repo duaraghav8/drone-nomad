@@ -46,6 +46,10 @@ def _get_tag():
     return commit[:8]
 
 
+def _is_debug():
+    return getenv('PLUGIN_DEBUG') == 'true' or getenv('debug') == 'true'
+
+
 _optional = {
     'ACCOUNT_NUMBER': _get_account_number,
     'PLUGIN_REGION': _get_self_region,
@@ -54,6 +58,7 @@ _optional = {
     'dc': _get_datacenters,
     'container_tag': _get_tag,
     'target_job': 'jobspec',
+    'verbose': _is_debug
 }
 
 _normal_names = {
