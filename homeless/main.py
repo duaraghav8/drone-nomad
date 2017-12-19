@@ -1,0 +1,291 @@
+import boto3
+import time
+import json
+import subprocess
+from os import path, getenv
+from .config import build_config, NOMAD_BIN_PATH
+
+in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
+
+
+def _get_client(service, role, region, session_name):
+    sts = boto3.client('sts', region_name=region)
+    creds = sts.assume_role(RoleArn=role, RoleSessionName='{}-{}'.format(session_name, service)).get('Credentials')
+
+    return boto3.client(service,
+                        aws_access_key_id=creds.get('AccessKeyId'),
+                        aws_secret_access_key=creds.get('SecretAccessKey'),
+                        aws_session_token=creds.get('SessionToken'),
+                        region_name=region)
+
+
+def _load_job_spec(job):
+    subp = subprocess.Popen([NOMAD_BIN_PATH, 'run', '--output', job + '.nomad'],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    stdout, stderr = subp.communicate()
+    if subp.returncode != 0:
+        raise Exception(stderr)
+
+    return json.loads(stdout)
+
+
+def _match_cond(cond, data):
+    matcher = cond.replace('@cond(', '').rstrip(')').split(' ')
+    if len(matcher) != 3:
+        raise Exception('Invalid syntax for condition "{}"'.format(cond))
+
+    if matcher[0] not in data.keys():
+        return False
+
+    expected = matcher[2]
+    present = data[matcher[0]]
+    op = matcher[1]
+
+    if op == '=':
+        return expected == present
+    elif op == '!=':
+        return expected != present
+    else:
+        raise Exception('Condition operation "{}" is not recognized'.format(op))
+
+
+def _merge(base, extras):
+    for key in extras:
+        if isinstance(extras[key], list):
+            if key not in base or base[key] is None:
+                base[key] = extras[key]
+            elif isinstance(base[key], list):
+                base[key].extend(extras[key])
+            else:
+                raise Exception('Conflicting values at "{}", list type can override only empty values or lists'.format(key))
+            continue
+
+        if not isinstance(extras[key], (dict, str, unicode, int, float, bool, bytes, type(None))):
+            raise Exception('Overrides must only contain scalar or dictionary values. Unsupported type {} on {}'.format(
+                str(type(extras[key])), key))
+
+        nest = False
+        ref_key = key
+        if key.endswith('.*'):
+            ref_key = key[:-2]
+            nest = True
+
+        if ref_key not in base:
+            if ref_key.startswith('@cond'):
+                base = _merge(base, extras[key]) if _match_cond(key, base) else base
+            else:
+                base[ref_key] = extras[key]
+        elif isinstance(base[ref_key], dict) and isinstance(extras[key], dict):
+            base[ref_key] = _merge(base[ref_key], extras[key])
+        elif isinstance(base[ref_key], list) and isinstance(extras[key], dict) and nest:
+            base[ref_key] = [_merge(each, extras[key]) for each in base[ref_key]]
+        else:
+            base[ref_key] = extras[key]
+
+    return base
+
+
+def _merge_specs(base, overrides):
+    if overrides is None:
+        return base
+
+    base['Job'] = _merge(base['Job'], overrides)
+    return base
+
+
+def _update_container_in_group(task, tag):
+    uri, _ = task['Config']['image'].split(':')
+    task['Config']['image'] = '{}:{}'.format(uri, tag)
+    return task
+
+
+def _update_container_tag(spec, tag, task_name):
+    spec_copy = spec.copy()
+    for gid, group in enumerate(spec['Job']['TaskGroups']):
+        for tid, each in enumerate(group['Tasks']):
+            if each['Name'] == task_name:
+                spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = _update_container_in_group(each, tag)
+
+    return spec_copy
+
+
+def _process_job_overrides(dynamo, base_spec, env, task, tag, dc):
+    job_name = base_spec['Job']['ID']
+    data = dynamo.get_item(Key={'job': job_name,
+                                'environment': env})
+
+    spec = _merge_specs(base_spec, overrides=data.get('Item', {}).get('overrides'))
+    if dc is not None:
+        spec['Job']['Region'] = dc[0]
+        spec['Job']['Datacenter'] = dc[1]
+
+    return _update_container_tag(spec, tag, task)
+
+
+def _print_plan(plan):
+    print('Job: "{}"'.format(plan.get('Diff').get('ID')))
+    for group in plan.get('Diff').get('TaskGroups'):
+        print('Task Group "{}"'.format(group.get('Name')))
+        for k, v in group.get('Updates').items():
+            print('  {}: {}'.format(k, v))
+
+        for task in group.get('Tasks'):
+            if task.get('Type') == 'None':
+                continue
+
+            ann = task.get('Annotations')
+            ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
+            print('  {} task "{}" {}'.format(task.get('Type'), task.get('Name'), ann))
+            for field in task.get('Fields') or []:
+                ann = field.get('Annotations')
+                ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
+                print('    {} field {}: "{}" -> "{}" {}'.format(field['Type'],
+                                                                field['Name'],
+                                                                field['Old'],
+                                                                field['New'],
+                                                                ann))
+
+
+def _plan_deployment(client, spec):
+    diff = client(spec=spec['Job'], action='plan')
+    failures = diff.get('FailedTGAllocs') or dict()
+    if failures.keys():
+        print('Failed to place allocations: ' + json.dumps(json.loads(failures), indent=2))
+        raise Exception('Task plan failed')
+
+    _print_plan(diff)
+    return diff.get('JobModifyIndex')
+
+
+def _queue_job(client, spec, modification_index):
+    result = client(spec=spec, action='run', index=modification_index)
+    return result.get('EvalID'), result.get('JobModifyIndex')
+
+
+def _ready_to_promote(deployment):
+    for name, group in deployment.get('TaskGroups').items():
+        desired = group.get('DesiredTotal')
+        placed_canaries = deployment.get('PlacedCanaries') or []
+        desired_canaries = deployment.get('DesiredCanaries')
+        healthy = deployment.get('HealthyAllocs')
+        placed_allocs = deployment.get('PlacedAllocs')
+        unhealthy = deployment.get('UnhealthyAllocs')
+
+        if len(placed_canaries) != desired_canaries:
+            return False
+
+        if unhealthy > 0:
+            return False
+
+        if healthy < desired:
+            return False
+
+        if len(placed_canaries) + placed_allocs < desired:
+            return False
+
+    return True
+
+
+def _promote_canaries(client, spec, eval_id):
+    canaries = spec.get('Job').get('Update').get('Canary')
+    if canaries is None:
+        return
+
+    eval_status = client(action='get_eval', evaluation_id=eval_id)
+    deployment_id = eval_status.get('DeploymentID')
+
+    while True:
+        deployment = client(action='get_deployment', deployment_id=deployment_id)
+        status = deployment.get('Status')
+        if status == 'successful':
+            # well, damn.
+            return
+
+        if status == 'cancelled' or status == 'failed':
+            print('Deployment failed. cannot promote canaries...')
+            raise Exception('Failed to promote canaries on failed deployment')
+
+        if status == 'running':
+            if not _ready_to_promote(deployment):
+                print('Deployment is still running, waiting for deployment to finish...')
+                time.sleep(10)
+                continue
+
+            client(action='promote', deployment_id=deployment_id)
+            break
+
+
+def _get_lambda_client(func, iam_role_arn, region, session_name):
+    def _sync_client(**kwargs):
+        from .lambda_handler import _actions
+        return _actions[kwargs.get('action')](kwargs)
+
+    def _lambda(client):
+        def _client_wrapper(**kwargs):
+            response = client.invoke(FunctionName=func, Payload=kwargs)
+            if response['StatusCode'] != 200:
+                raise Exception('Lambda invocation failure: {}'.format(response['Payload'].read()))
+
+            return json.load(response['Payload'])
+
+        return _client_wrapper
+
+    if in_local_mode:
+        return _sync_client
+    else:
+        client = _get_client('lambda', iam_role_arn, region, session_name)
+        return _lambda(client)
+
+
+def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
+    class DumbTable(object):
+        def __init__(self, path_prefix):
+            self._path_prefix = path_prefix
+
+        def get_item(self, **kwargs):
+            job_name = kwargs['Key']['job']
+            env = kwargs['Key']['environment']
+            patch_file = path.join(self._path_prefix, '{}_{}.json'.format(env, job_name))
+            if not path.exists(patch_file):
+                return dict()
+
+            with open(patch_file) as f:
+                return dict(Item=json.load(f))
+
+    if in_local_mode:
+        return DumbTable(table_name)
+    else:
+        client = _get_client('dynamodb', iam_role, region, session_prefix)
+        return client.Table(table_name)
+
+
+def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, dynamodb_table,
+               commit_id, build_number, account_number, region, ci_role, dc, only_plan):
+    session_name_prefix = 'drone-{}-{}'.format(commit_id[:8], build_number)
+
+    if not path.exists('{}.nomad'.format(target_job)):
+        raise Exception('Unknown target job {}. Expecting file "{}.nomad" to exist'.format(target_job, target_job))
+
+    iam_role_arn = 'arn:aws:iam::{}:role/{}'.format(account_number, ci_role)
+    lambda_client = _get_lambda_client(lambda_func, iam_role_arn, region, session_name_prefix)
+    dynamodb_table = _get_dynamodb_table(dynamodb_table, iam_role_arn, region, session_name_prefix)
+
+    job_spec = _load_job_spec(target_job)
+    job_spec = _process_job_overrides(dynamodb_table,
+                                      job_spec,
+                                      target_env,
+                                      container_tag,
+                                      target_task,
+                                      dc)
+
+    modification_index = _plan_deployment(lambda_client, job_spec)
+
+    if not only_plan:
+        eval_id, modify_index = _queue_job(lambda_client, job_spec, modification_index)
+        _promote_canaries(lambda_client, job_spec, eval_id)
+
+
+if __name__ == '__main__':
+    config = build_config()
+    entrypoint(**config)
