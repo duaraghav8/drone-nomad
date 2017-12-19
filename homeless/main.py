@@ -3,6 +3,7 @@ import time
 import json
 import subprocess
 from os import path, getenv
+import decimal
 from .config import build_config, NOMAD_BIN_PATH
 
 in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
@@ -52,6 +53,9 @@ def _match_cond(cond, data):
         raise Exception('Condition operation "{}" is not recognized'.format(op))
 
 
+_supported_types = (dict, str, int, float, complex, bool, bytes, type(None), decimal.Decimal)
+
+
 def _merge(base, extras):
     for key in extras:
         if isinstance(extras[key], list):
@@ -64,7 +68,7 @@ def _merge(base, extras):
                     'Conflicting values at "{}", list type can override only empty values or lists'.format(key))
             continue
 
-        if not isinstance(extras[key], (dict, str, int, float, bool, bytes, type(None))):
+        if not isinstance(extras[key], _supported_types):
             raise Exception('Overrides must only contain scalar or dictionary values. Unsupported type {} on {}'.format(
                 str(type(extras[key])), key))
 
