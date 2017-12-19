@@ -1,7 +1,7 @@
 from os import getenv, path
 from boto import utils
 
-NOMAD_BIN_PATH = getenv('NOMAD_BIN_PATH', path.join(path.abspath(__file__), 'assets/nomad'))
+NOMAD_BIN_PATH = getenv('NOMAD_BIN_PATH', path.join(path.dirname(path.abspath(__file__)), 'assets/nomad'))
 
 _required = {'DRONE_DEPLOY_TO',
              'target_task',
