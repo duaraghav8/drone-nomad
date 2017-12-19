@@ -25,6 +25,10 @@ def _get_self_region():
     return data['document']['region']
 
 
+def _get_local_account_number():
+    return utils.get_instance_identity()['document']['accountId']
+
+
 def _only_plan():
     return getenv('plan') == 'true'
 
@@ -51,6 +55,7 @@ def _is_debug():
 
 _optional = {
     'ACCOUNT_NUMBER': _get_account_number,
+    'local_account': _get_local_account_number,
     'PLUGIN_REGION': _get_self_region,
     'PLUGIN_CI_ROLE': 'ci',
     'only_plan': _only_plan,

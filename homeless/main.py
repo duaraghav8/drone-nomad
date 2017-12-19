@@ -264,15 +264,16 @@ def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
 
 
 def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, dynamodb_table,
-               commit_id, build_number, account_number, region, ci_role, dc, only_plan):
+               commit_id, build_number, account_number, local_account, region, ci_role, dc, only_plan):
     session_name_prefix = 'drone-{}-{}'.format(commit_id[:8], build_number)
 
     if not path.exists('{}.nomad'.format(target_job)):
         raise Exception('Unknown target job {}. Expecting file "{}.nomad" to exist'.format(target_job, target_job))
 
-    iam_role_arn = 'arn:aws:iam::{}:role/{}'.format(account_number, ci_role)
-    lambda_client = _get_lambda_client(lambda_func, iam_role_arn, region, session_name_prefix)
-    dynamodb_table = _get_dynamodb_table(dynamodb_table, iam_role_arn, region, session_name_prefix)
+    local_arn = 'arn:aws:iam::{}:role/{}'.format(local_account, ci_role)
+    target_arn = 'arn:aws:iam::{}:role/{}'.format(account_number, ci_role)
+    lambda_client = _get_lambda_client(lambda_func, target_arn, region, session_name_prefix)
+    dynamodb_table = _get_dynamodb_table(dynamodb_table, local_arn, region, session_name_prefix)
 
     job_spec = _load_job_spec(target_job)
     job_spec = _process_job_overrides(dynamodb_table,
