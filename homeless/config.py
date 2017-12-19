@@ -1,4 +1,3 @@
-import json
 from os import getenv, path
 from boto import utils
 
@@ -79,9 +78,9 @@ def build_config():
         if getenv(each) is None:
             raise Exception('Required parameter {} is not set'.format(each))
         if each in _normal_names.keys():
-            each = _normal_names[each]
-
-        config[each] = getenv(each)
+            config[_normal_names[each]] = getenv(each)
+        else:
+            config[each] = getenv(each)
 
     for k, v in _optional.items():
         if getenv(k) is not None:
@@ -91,8 +90,9 @@ def build_config():
                 v = v()
 
         if k in _normal_names.keys():
-            k = _normal_names[k]
-        config[k] = v
+            config[_normal_names[k]] = v
+        else:
+            config[k] = v
 
     return config
 
