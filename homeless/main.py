@@ -53,7 +53,7 @@ def _match_cond(cond, data):
         raise Exception('Condition operation "{}" is not recognized'.format(op))
 
 
-_supported_types = (dict, str, int, float, complex, bool, bytes, type(None), decimal.Decimal)
+_supported_types = (dict, str, int, float, complex, bool, bytes, type(None))
 
 
 def _merge(base, extras):
@@ -93,11 +93,29 @@ def _merge(base, extras):
     return base
 
 
+def _replace_decimals(obj):
+    if isinstance(obj, list):
+        for i in range(len(obj)):
+            obj[i] = _replace_decimals(obj[i])
+        return obj
+    elif isinstance(obj, dict):
+        for k in obj.keys():
+            obj[k] = _replace_decimals(obj[k])
+        return obj
+    elif isinstance(obj, decimal.Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        else:
+            return float(obj)
+    else:
+        return obj
+
+
 def _merge_specs(base, overrides):
     if overrides is None:
         return base
 
-    base['Job'] = _merge(base['Job'], overrides)
+    base['Job'] = _merge(base['Job'], _replace_decimals(overrides))
     return base
 
 
@@ -234,7 +252,9 @@ def _get_lambda_client(func, iam_role_arn, region, session_name):
             if response['StatusCode'] != 200:
                 raise Exception('Lambda invocation failure: {}'.format(response['Payload'].read()))
 
-            return json.load(response['Payload'])
+            result = response['Payload'].read()
+            logger(result)
+            return json.load(result)
 
         return _client_wrapper
 
