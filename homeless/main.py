@@ -119,9 +119,17 @@ def _merge_specs(base, overrides):
     return base
 
 
-def _update_container_in_group(task, tag):
+def _update_task_container(task, tag):
     uri, _ = task['Config']['image'].split(':')
     task['Config']['image'] = '{}:{}'.format(uri, tag)
+
+    for service in task['Services']:
+        if service['Tags'] is None:
+            service['Tags'] = []
+
+        new_tags = ['{}-{}'.format(t, tag) for t in service['Tags']]
+        service['Tags'].append(new_tags)
+
     return task
 
 
@@ -130,7 +138,7 @@ def _update_container_tag(spec, tag, task_name):
     for gid, group in enumerate(spec['Job']['TaskGroups']):
         for tid, each in enumerate(group['Tasks']):
             if each['Name'] == task_name:
-                spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = _update_container_in_group(each, tag)
+                spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = _update_task_container(each, tag)
 
     return spec_copy
 
