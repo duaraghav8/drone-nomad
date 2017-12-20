@@ -1,4 +1,4 @@
-from os import getenv, path
+from os import getenv
 from boto import utils
 
 NOMAD_BIN_PATH = getenv('NOMAD_BIN_PATH', '/usr/bin/nomad')
@@ -77,7 +77,7 @@ _normal_names = {
 }
 
 
-def build_config():
+def _build_create_config():
     config = dict()
     for each in _required:
         if getenv(each) is None:
@@ -101,4 +101,29 @@ def build_config():
 
     return config
 
+
+def _build_promote_config():
+    return {
+        'target_job': getenv('target_job', 'jobspec'),
+        'lambda_func': getenv('PLUGIN_LAMBDA_FUNC'),
+        'account_number': _get_account_number(),
+        'region': getenv('PLUGIN_REGION', _get_self_region()),
+        'ci_role': getenv('PLUGIN_CI_ROLE', 'ci'),
+        'commit_id': getenv('DRONE_COMMIT'),
+        'build_number': getenv('DRONE_BUILD_NUMBER'),
+        'verbose': _is_debug()
+    }
+
+
+_builder = {
+    'create': _build_create_config,
+    'promote': _build_promote_config
+}
+
+
+def build_config():
+    action = getenv('action', 'create')
+    config = _builder[action]()
+    config['action'] = action
+    return config
 

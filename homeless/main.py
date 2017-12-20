@@ -185,27 +185,20 @@ def _plan_deployment(client, spec):
 
 def _queue_job(client, spec, modification_index):
     result = client(spec=spec, action='run', index=modification_index)
-    return result.get('EvalID'), result.get('JobModifyIndex')
+    evaluation = client(action='get_eval', evaluation_id=result.get('EvalID'))
+    return evaluation.get('DeploymentID')
 
 
 def _ready_to_promote(deployment):
     for name, group in deployment.get('TaskGroups').items():
         desired_total = group.get('DesiredTotal')
-        desired_canaries = deployment.get('DesiredCanaries')
-        placed_canaries = deployment.get('PlacedCanaries')
-        placed_allocs = deployment.get('PlacedAllocs')
-        healthy = deployment.get('HealthyAllocs')
-        unhealthy = deployment.get('UnhealthyAllocs')
-
-        logger('Desired total: {}'.format(desired_total))
-        logger('Desired canaries: {}'.format(desired_canaries))
-        logger('Placed canaries: {}'.format(placed_canaries))
-        logger('Placed allocs: {}'.format(placed_allocs))
-        logger('Healthy allocs: {}'.format(healthy))
-        logger('Unhealthy allocs: {}'.format(unhealthy))
+        desired_canaries = group.get('DesiredCanaries')
+        placed_canaries = group.get('PlacedCanaries')
+        placed_allocs = group.get('PlacedAllocs')
+        healthy = group.get('HealthyAllocs')
+        unhealthy = group.get('UnhealthyAllocs')
 
         placed_canaries = len(placed_canaries) if placed_canaries is not None else 0
-        logger('Placed canaries count: {}'.format(placed_canaries))
 
         logger('Validating task {}'.format(name))
         if placed_canaries != desired_canaries:
@@ -228,36 +221,26 @@ def _ready_to_promote(deployment):
     return True
 
 
-def _promote_canaries(client, spec, eval_id):
-    canaries = spec.get('Job').get('Update').get('Canary')
-    if canaries is None:
-        return
+def _allocations_placed(client, deployment_id):
+    deployment = client(action='get_deployment', deployment_id=deployment_id)
+    status = deployment.get('Status')
+    if status is None:
+        raise Exception('Failed to retrieve deployment status')
 
-    eval_status = client(action='get_eval', evaluation_id=eval_id)
-    deployment_id = eval_status.get('DeploymentID')
+    if status == 'successful':
+        return True
 
-    while True:
-        deployment = client(action='get_deployment', deployment_id=deployment_id)
-        status = deployment.get('Status')
-        if status is None:
-            raise Exception('Failed to retrieve deployment status')
+    if status == 'cancelled' or status == 'failed':
+        raise Exception('Deployment failed with status "{}"'.format(status))
 
-        if status == 'successful':
-            # well, damn.
-            return
+    if status == 'running':
+        return _ready_to_promote(deployment)
 
-        if status == 'cancelled' or status == 'failed':
-            print('Deployment failed. cannot promote canaries...')
-            raise Exception('Failed to promote canaries on failed deployment')
+    return False
 
-        if status == 'running':
-            if not _ready_to_promote(deployment):
-                print('Deployment is still running, waiting for deployment to finish...')
-                time.sleep(10)
-                continue
 
-            client(action='promote', deployment_id=deployment_id)
-            break
+def _promote_canaries(client, deployment_id):
+    client(action='promote', deployment_id=deployment_id)
 
 
 def _get_lambda_client(func, iam_role_arn, region, session_name):
@@ -283,8 +266,7 @@ def _get_lambda_client(func, iam_role_arn, region, session_name):
     if in_local_mode:
         return _sync_client
     else:
-        client = _get_client('lambda', iam_role_arn, region, session_name)
-        return _lambda(client)
+        return _lambda(_get_client('lambda', iam_role_arn, region, session_name))
 
 
 def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
@@ -309,8 +291,34 @@ def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
         return client.Table(table_name)
 
 
-def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, dynamodb_table,
-               commit_id, build_number, account_number, local_account, region, ci_role, dc, only_plan):
+def _get_promotion_cb(client, spec, task_name, tag):
+    job_name = spec.get('Job').get('Name')
+
+    ns = dict()
+    for group in spec.get('Job').get('TaskGroups'):
+        for task in group.get('Tasks'):
+            if task.get('Name') == task_name:
+                ns['_config/services/{}/{}/{}/active_tag'.format(job_name, group.get('Name'), task.get('Name'))] = tag
+
+    def _cb():
+        for k, v in ns.items():
+            result = client(action='put_kv', key=k, value=v)
+            print('put_kv "{}" = "{}" -> {}'.format(k, v, result.get('result')))
+
+    return _cb
+
+
+def _on_placements_ready(client, deployment_id, cb):
+    while not _allocations_placed(client, deployment_id):
+        print('Deployment is still running, waiting for allocations to be placed...')
+        time.sleep(10)
+        continue
+
+    return cb()
+
+
+def place_allocations(target_env, target_job, target_task, container_tag, lambda_func, dynamodb_table,
+                      commit_id, build_number, account_number, local_account, region, ci_role, dc, only_plan):
     session_name_prefix = 'drone-{}-{}'.format(commit_id[:8], build_number)
 
     if not path.exists('{}.nomad'.format(target_job)):
@@ -333,21 +341,52 @@ def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, 
     logger(json.dumps(job_spec, indent=2))
 
     modification_index = _plan_deployment(lambda_client, job_spec)
+    _update_active_ref = _get_promotion_cb(lambda_client, job_spec, target_task, container_tag)
 
     if not only_plan:
-        eval_id, modify_index = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
-        _promote_canaries(lambda_client, job_spec, eval_id)
+        deployment_id = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
+        _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
+        print('All allocations are in place, you can promote the deployment now')
+
+
+def _latest_deployment_id(client, job_id):
+    deployment = client(action='get_last_deployment', job_id=job_id)
+    return deployment['ID']
+
+
+def promote_allocations(target_job, lambda_func, account_number, region, ci_role, commit_id, build_number):
+    session_name_prefix = 'drone-{}-{}'.format(commit_id[:8], build_number)
+    if not path.exists('{}.nomad'.format(target_job)):
+        raise Exception('Unknown target job {}. Expecting file "{}.nomad" to exist'.format(target_job, target_job))
+
+    target_arn = 'arn:aws:iam::{}:role/{}'.format(account_number, ci_role)
+    lambda_client = _get_lambda_client(lambda_func, target_arn, region, session_name_prefix)
+
+    job_spec = _load_job_spec(target_job)
+    deployment_id = _latest_deployment_id(lambda_client, job_spec.get('Job').get('ID'))
+
+    def _promote():
+        return _promote_canaries(lambda_client, deployment_id)
+
+    _on_placements_ready(lambda_client, deployment_id, _promote)
 
 
 def get_logger(verbose):
     def _l(msg):
         if verbose:
             print(' +' + str(msg))
+
     return _l
 
 
+_actions = {
+    'create': place_allocations,
+    'promote': promote_allocations,
+}
+
 if __name__ == '__main__':
     import os
+
     config = build_config()
 
     logger = get_logger(config['verbose'])
@@ -355,6 +394,9 @@ if __name__ == '__main__':
     [logger('{} = {}'.format(k, v)) for k, v in config.items()]
     logger('Environment')
     [logger('{} = {}'.format(k, v)) for k, v in os.environ.items()]
-
     del config['verbose']
-    entrypoint(**config)
+
+    action = config.get('action')
+    del config['action']
+
+    _actions[action](**config)
