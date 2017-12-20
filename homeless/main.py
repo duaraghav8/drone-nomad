@@ -135,7 +135,7 @@ def _update_container_tag(spec, tag, task_name):
     return spec_copy
 
 
-def _process_job_overrides(dynamo, base_spec, env, task, tag, dc):
+def _process_job_overrides(*, dynamo, base_spec, env, task, tag, dc):
     job_name = base_spec['Job']['ID']
     data = dynamo.get_item(Key={'job': job_name,
                                 'environment': env})
@@ -197,18 +197,24 @@ def _ready_to_promote(deployment):
         placed_allocs = deployment.get('PlacedAllocs')
         unhealthy = deployment.get('UnhealthyAllocs')
 
+        logger('Validating task {}'.format(name))
         if len(placed_canaries) != desired_canaries:
+            logger('Placed canaries != desired canaries')
             return False
 
         if unhealthy > 0:
+            logger('Unhealthy allocations')
             return False
 
         if healthy < desired:
+            logger('healthy < desired')
             return False
 
         if len(placed_canaries) + placed_allocs < desired:
+            logger('placed canaries + placed allocs < desired')
             return False
 
+    logger('Allocations are ready for promotion')
     return True
 
 
@@ -223,6 +229,9 @@ def _promote_canaries(client, spec, eval_id):
     while True:
         deployment = client(action='get_deployment', deployment_id=deployment_id)
         status = deployment.get('Status')
+        if status is None:
+            raise Exception('Failed to retrieve deployment status')
+
         if status == 'successful':
             # well, damn.
             return
@@ -253,8 +262,11 @@ def _get_lambda_client(func, iam_role_arn, region, session_name):
                 raise Exception('Lambda invocation failure: {}'.format(response['Payload'].read()))
 
             result = response['Payload'].read()
-            logger(result)
-            return json.load(result)
+
+            logger('Received payload from lambda')
+            logger(json.dumps(json.loads(result), indent=2))
+
+            return json.loads(result)
 
         return _client_wrapper
 
@@ -300,24 +312,27 @@ def entrypoint(target_env, target_job, target_task, container_tag, lambda_func, 
     dynamodb_table = _get_dynamodb_table(dynamodb_table, local_arn, region, session_name_prefix)
 
     job_spec = _load_job_spec(target_job)
-    job_spec = _process_job_overrides(dynamodb_table,
-                                      job_spec,
-                                      target_env,
-                                      container_tag,
-                                      target_task,
-                                      dc)
+    job_spec = _process_job_overrides(dynamo=dynamodb_table,
+                                      base_spec=job_spec,
+                                      env=target_env,
+                                      tag=container_tag,
+                                      task=target_task,
+                                      dc=dc)
+
+    logger('Final job specification')
+    logger(json.dumps(job_spec, indent=2))
 
     modification_index = _plan_deployment(lambda_client, job_spec)
 
     if not only_plan:
-        eval_id, modify_index = _queue_job(lambda_client, job_spec, modification_index)
+        eval_id, modify_index = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
         _promote_canaries(lambda_client, job_spec, eval_id)
 
 
 def get_logger(verbose):
     def _l(msg):
         if verbose:
-            print(' +' + msg)
+            print(' +' + str(msg))
     return _l
 
 
