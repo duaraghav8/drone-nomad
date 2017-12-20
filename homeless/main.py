@@ -190,15 +190,25 @@ def _queue_job(client, spec, modification_index):
 
 def _ready_to_promote(deployment):
     for name, group in deployment.get('TaskGroups').items():
-        desired = group.get('DesiredTotal')
-        placed_canaries = deployment.get('PlacedCanaries') or []
+        desired_total = group.get('DesiredTotal')
         desired_canaries = deployment.get('DesiredCanaries')
-        healthy = deployment.get('HealthyAllocs')
+        placed_canaries = deployment.get('PlacedCanaries')
         placed_allocs = deployment.get('PlacedAllocs')
+        healthy = deployment.get('HealthyAllocs')
         unhealthy = deployment.get('UnhealthyAllocs')
 
+        logger('Desired total: {}'.format(desired_total))
+        logger('Desired canaries: {}'.format(desired_canaries))
+        logger('Placed canaries: {}'.format(placed_canaries))
+        logger('Placed allocs: {}'.format(placed_allocs))
+        logger('Healthy allocs: {}'.format(healthy))
+        logger('Unhealthy allocs: {}'.format(unhealthy))
+
+        placed_canaries = len(placed_canaries) if placed_canaries is not None else 0
+        logger('Placed canaries count: {}'.format(placed_canaries))
+
         logger('Validating task {}'.format(name))
-        if len(placed_canaries) != desired_canaries:
+        if placed_canaries != desired_canaries:
             logger('Placed canaries != desired canaries')
             return False
 
@@ -206,11 +216,11 @@ def _ready_to_promote(deployment):
             logger('Unhealthy allocations')
             return False
 
-        if healthy < desired:
+        if healthy < desired_total:
             logger('healthy < desired')
             return False
 
-        if len(placed_canaries) + placed_allocs < desired:
+        if placed_canaries + placed_allocs < desired_total:
             logger('placed canaries + placed allocs < desired')
             return False
 
