@@ -128,7 +128,7 @@ def _update_task_container(task, tag):
             service['Tags'] = []
 
         new_tags = ['{}-{}'.format(t, tag) for t in service['Tags']]
-        service['Tags'].append(new_tags)
+        service['Tags'].extend(new_tags)
 
     return task
 
@@ -184,7 +184,7 @@ def _plan_deployment(client, spec):
     diff = client(spec=spec['Job'], action='plan')
     failures = diff.get('FailedTGAllocs') or dict()
     if failures.keys():
-        print('Failed to place allocations: ' + json.dumps(json.loads(failures), indent=2))
+        print('Failed to place allocations: ' + json.dumps(failures, indent=2))
         raise Exception('Task plan failed')
 
     _print_plan(diff)
