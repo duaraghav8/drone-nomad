@@ -134,10 +134,11 @@ def _update_task_container(task, tag):
 
 
 def _update_container_tag(spec, tag, task_name):
+    target_tasks = task_name.split(',')
     spec_copy = spec.copy()
     for gid, group in enumerate(spec['Job']['TaskGroups']):
         for tid, each in enumerate(group['Tasks']):
-            if each['Name'] == task_name:
+            if each['Name'] in target_tasks or task_name == 'all':
                 spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = _update_task_container(each, tag)
 
     return spec_copy
@@ -301,11 +302,12 @@ def _get_dynamodb_table(table_name, iam_role, region, session_prefix):
 
 def _get_promotion_cb(client, spec, task_name, tag):
     job_name = spec.get('Job').get('Name')
+    task_names = task_name.split(',')
 
     ns = dict()
     for group in spec.get('Job').get('TaskGroups'):
         for task in group.get('Tasks'):
-            if task.get('Name') == task_name:
+            if task.get('Name') in task_names or task_name == 'all':
                 ns['_config/services/{}/{}/{}/active_tag'.format(job_name, group.get('Name'), task.get('Name'))] = tag
 
     def _cb():
