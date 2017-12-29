@@ -194,6 +194,9 @@ def _plan_deployment(client, spec):
 
 def _queue_job(client, spec, modification_index):
     result = client(spec=spec, action='run', index=modification_index)
+    if result.get('EvalID') == "":
+        return None
+
     evaluation = client(action='get_eval', evaluation_id=result.get('EvalID'))
     return evaluation.get('DeploymentID')
 
@@ -355,8 +358,11 @@ def place_allocations(target_env, target_job, target_task, container_tag, lambda
 
     if not only_plan:
         deployment_id = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
-        _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
-        print('All allocations are in place, you can promote the deployment now')
+        if deployment_id is not None:
+            _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
+            print('All allocations are in place, you can promote the deployment now')
+        else:
+            print('Deployment successful')
 
 
 def _latest_deployment_id(client, job_id):
