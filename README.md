@@ -61,6 +61,13 @@ with name `drone-nomad`
         }
     }
 
+## Revision Tracking
+Some tasks may require information about their own or some other task's active revision. The plugin
+automatically tries to propagate the active revision information in two ways:
+
+ 1. By updating `REVISION` meta variable on each updated task
+ 2. By putting the latest revision in Consul KV under path prefix `_config/services/<job_name>/<group_name>/<task_name>/active_tag` for each updated task
+
 
 ## Plugin Configuration
 

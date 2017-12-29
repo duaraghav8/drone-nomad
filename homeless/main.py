@@ -120,8 +120,18 @@ def _merge_specs(base, overrides):
 
 
 def _update_task_container(task, tag):
+    if task['Driver'] != 'docker':
+        return task
+
     uri, _ = task['Config']['image'].split(':')
     task['Config']['image'] = '{}:{}'.format(uri, tag)
+
+    return task
+
+
+def _add_service_tags(task, tag):
+    if 'Service' not in task or task['Service'] is None:
+        return task
 
     for service in task['Services']:
         if service['Tags'] is None:
@@ -133,13 +143,25 @@ def _update_task_container(task, tag):
     return task
 
 
-def _update_container_tag(spec, tag, task_name):
+def _add_task_revision(task, revision):
+    if 'Meta' not in task or task['Meta'] is None:
+        task['Meta'] = dict()
+
+    task['Meta']['REVISION'] = revision
+    return task
+
+
+def _update_versions(spec, tag, task_name):
     target_tasks = task_name.split(',')
     spec_copy = spec.copy()
     for gid, group in enumerate(spec['Job']['TaskGroups']):
         for tid, each in enumerate(group['Tasks']):
             if each['Name'] in target_tasks or task_name == 'all':
-                spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = _update_task_container(each, tag)
+                task = spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid]
+                task = _update_task_container(task, tag)
+                task = _add_service_tags(task, tag)
+                task = _add_task_revision(task, tag)
+                spec_copy['Job']['TaskGroups'][gid]['Tasks'][tid] = task
 
     return spec_copy
 
@@ -154,7 +176,7 @@ def _process_job_overrides(*, dynamo, base_spec, env, task, tag, dc):
         spec['Job']['Region'] = dc[0]
         spec['Job']['Datacenter'] = dc[1]
 
-    return _update_container_tag(spec, tag, task)
+    return _update_versions(spec, tag, task)
 
 
 def _print_plan(plan):
@@ -266,12 +288,15 @@ def _get_lambda_client(func, iam_role_arn, region, session_name):
             if response['StatusCode'] != 200:
                 raise Exception('Lambda invocation failure: {}'.format(response['Payload'].read()))
 
-            result = response['Payload'].read()
+            result = json.load(response['Payload'])
+            if 'FunctionError' in response and response['FunctionError'] in ['Handled', 'Unhandled']:
+                raise Exception('Lambda invocation failure: {}'.format(json.dumps(result, indent=2)))
+
 
             logger('Received payload from lambda')
-            logger(json.dumps(json.loads(result), indent=2))
+            logger(json.dumps(result, indent=2))
 
-            return json.loads(result)
+            return result
 
         return _client_wrapper
 
