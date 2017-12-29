@@ -130,7 +130,7 @@ def _update_task_container(task, tag):
 
 
 def _add_service_tags(task, tag):
-    if 'Service' not in task or task['Service'] is None:
+    if 'Services' not in task or task['Services'] is None:
         return task
 
     for service in task['Services']:
