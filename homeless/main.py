@@ -177,7 +177,7 @@ def _process_job_overrides(*, dynamo, base_spec, env, task, tag, dc):
     spec = _merge_specs(base_spec, overrides=data.get('Item', {}).get('overrides'))
     if dc is not None:
         spec['Job']['Region'] = dc[0]
-        spec['Job']['Datacenter'] = dc[1]
+        spec['Job']['Datacenters'] = dc[1].split(',')
 
     return _update_versions(spec, tag, task)
 
