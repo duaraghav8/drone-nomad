@@ -123,7 +123,9 @@ def _update_task_container(task, tag):
     if task['Driver'] != 'docker':
         return task
 
-    if task.get('Meta', {}).get('version_pinned') in [True, "true", "1", 1]:
+    meta = task.get('Meta', {})
+    meta = dict() if meta is None else meta
+    if meta.get('version_pinned') in [True, "true", "1", 1]:
         return task
 
     uri, _ = task['Config']['image'].split(':')
