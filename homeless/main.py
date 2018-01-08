@@ -123,6 +123,9 @@ def _update_task_container(task, tag):
     if task['Driver'] != 'docker':
         return task
 
+    if task.get('Meta', {}).get('version_pinned') in [True, "true", "1", 1]:
+        return task
+
     uri, _ = task['Config']['image'].split(':')
     task['Config']['image'] = '{}:{}'.format(uri, tag)
 
@@ -383,7 +386,7 @@ def place_allocations(target_env, target_job, target_task, container_tag, lambda
 
     if not only_plan:
         deployment_id = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
-        if deployment_id is not None:
+        if deployment_id is not None and deployment_id != "":
             _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
             print('All allocations are in place, you can promote the deployment now')
         else:
