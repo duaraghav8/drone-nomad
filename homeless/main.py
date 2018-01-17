@@ -2,7 +2,7 @@ import boto3
 import time
 import json
 import subprocess
-from os import path, getenv
+from os import path, getenv, stdout
 import decimal
 from .config import build_config, NOMAD_BIN_PATH
 
@@ -420,7 +420,8 @@ def promote_allocations(target_job, lambda_func, account_number, region, ci_role
 def get_logger(verbose):
     def _l(msg):
         if verbose:
-            print(' +' + str(msg))
+            stdout.write(' +' + str(msg))
+            stdout.flush()
 
     return _l
 
