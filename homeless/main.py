@@ -2,7 +2,8 @@ import boto3
 import time
 import json
 import subprocess
-from os import path, getenv, stdout
+from sys import stdout
+from os import path, getenv
 import decimal
 from .config import build_config, NOMAD_BIN_PATH
 
