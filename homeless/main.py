@@ -2,18 +2,12 @@ import boto3
 import time
 import json
 import subprocess
-from sys import stdout
 from os import path, getenv
 import decimal
 from .config import build_config, NOMAD_BIN_PATH
 
 in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
 logger = None
-
-
-def _output(msg):
-    stdout.write(msg)
-    stdout.flush()
 
 
 def _get_client(service, role, region, session_name, resource=None):
@@ -191,11 +185,11 @@ def _process_job_overrides(*, dynamo, base_spec, env, task, tag, dc):
 
 
 def _print_plan(plan):
-    _output('Job: "{}"'.format(plan.get('Diff').get('ID')))
+    print('Job: "{}"'.format(plan.get('Diff').get('ID')), flush=True)
     for group in plan.get('Diff').get('TaskGroups'):
-        _output('Task Group "{}"'.format(group.get('Name')))
+        print('Task Group "{}"'.format(group.get('Name')), flush=True)
         for k, v in group.get('Updates').items():
-            _output('  {}: {}'.format(k, v))
+            print('  {}: {}'.format(k, v), flush=True)
 
         for task in group.get('Tasks'):
             if task.get('Type') == 'None':
@@ -203,22 +197,22 @@ def _print_plan(plan):
 
             ann = task.get('Annotations')
             ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
-            _output('  {} task "{}" {}'.format(task.get('Type'), task.get('Name'), ann))
+            print('  {} task "{}" {}'.format(task.get('Type'), task.get('Name'), ann), flush=True)
             for field in task.get('Fields') or []:
                 ann = field.get('Annotations')
                 ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
-                _output('    {} field {}: "{}" -> "{}" {}'.format(field['Type'],
+                print('    {} field {}: "{}" -> "{}" {}'.format(field['Type'],
                                                                 field['Name'],
                                                                 field['Old'],
                                                                 field['New'],
-                                                                ann))
+                                                                ann), flush=True)
 
 
 def _plan_deployment(client, spec):
     diff = client(spec=spec['Job'], action='plan')
     failures = diff.get('FailedTGAllocs') or dict()
     if failures.keys():
-        _output('Failed to place allocations: ' + json.dumps(failures, indent=2))
+        print('Failed to place allocations: ' + json.dumps(failures, indent=2), flush=True)
         raise Exception('Task plan failed')
 
     _print_plan(diff)
@@ -352,14 +346,14 @@ def _get_promotion_cb(client, spec, task_name, tag):
     def _cb():
         for k, v in ns.items():
             result = client(action='put_kv', key=k, value=v)
-            _output('put_kv "{}" = "{}" -> {}'.format(k, v, result.get('result')))
+            print('put_kv "{}" = "{}" -> {}'.format(k, v, result.get('result')), flush=True)
 
     return _cb
 
 
 def _on_placements_ready(client, deployment_id, cb):
     while not _allocations_placed(client, deployment_id):
-        _output('Deployment is still running, waiting for allocations to be placed...')
+        print('Deployment is still running, waiting for allocations to be placed...', flush=True)
         time.sleep(10)
         continue
 
@@ -396,9 +390,9 @@ def place_allocations(target_env, target_job, target_task, container_tag, lambda
         deployment_id = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
         if deployment_id is not None and deployment_id != "":
             _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
-            _output('All allocations are in place, you can promote the deployment now')
+            print('All allocations are in place, you can promote the deployment now', flush=True)
         else:
-            _output('Deployment successful')
+            print('Deployment successful', flush=True)
 
 
 def _latest_deployment_id(client, job_id):
@@ -426,8 +420,7 @@ def promote_allocations(target_job, lambda_func, account_number, region, ci_role
 def get_logger(verbose):
     def _l(msg):
         if verbose:
-            stdout.write(' +' + str(msg))
-            stdout.flush()
+            print(str(msg), flush=True)
 
     return _l
 
