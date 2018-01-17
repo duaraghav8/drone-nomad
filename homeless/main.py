@@ -11,6 +11,11 @@ in_local_mode = True if getenv('LOCAL_MODE') == 'true' else False
 logger = None
 
 
+def _output(msg):
+    stdout.write(msg)
+    stdout.flush()
+
+
 def _get_client(service, role, region, session_name, resource=None):
     sts = boto3.client('sts', region_name=region)
     creds = sts.assume_role(RoleArn=role, RoleSessionName='{}-{}'.format(session_name, service)).get('Credentials')
@@ -186,11 +191,11 @@ def _process_job_overrides(*, dynamo, base_spec, env, task, tag, dc):
 
 
 def _print_plan(plan):
-    print('Job: "{}"'.format(plan.get('Diff').get('ID')))
+    _output('Job: "{}"'.format(plan.get('Diff').get('ID')))
     for group in plan.get('Diff').get('TaskGroups'):
-        print('Task Group "{}"'.format(group.get('Name')))
+        _output('Task Group "{}"'.format(group.get('Name')))
         for k, v in group.get('Updates').items():
-            print('  {}: {}'.format(k, v))
+            _output('  {}: {}'.format(k, v))
 
         for task in group.get('Tasks'):
             if task.get('Type') == 'None':
@@ -198,11 +203,11 @@ def _print_plan(plan):
 
             ann = task.get('Annotations')
             ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
-            print('  {} task "{}" {}'.format(task.get('Type'), task.get('Name'), ann))
+            _output('  {} task "{}" {}'.format(task.get('Type'), task.get('Name'), ann))
             for field in task.get('Fields') or []:
                 ann = field.get('Annotations')
                 ann = '(' + ' & '.join(ann) + ')' if ann is not None else ''
-                print('    {} field {}: "{}" -> "{}" {}'.format(field['Type'],
+                _output('    {} field {}: "{}" -> "{}" {}'.format(field['Type'],
                                                                 field['Name'],
                                                                 field['Old'],
                                                                 field['New'],
@@ -213,7 +218,7 @@ def _plan_deployment(client, spec):
     diff = client(spec=spec['Job'], action='plan')
     failures = diff.get('FailedTGAllocs') or dict()
     if failures.keys():
-        print('Failed to place allocations: ' + json.dumps(failures, indent=2))
+        _output('Failed to place allocations: ' + json.dumps(failures, indent=2))
         raise Exception('Task plan failed')
 
     _print_plan(diff)
@@ -347,14 +352,14 @@ def _get_promotion_cb(client, spec, task_name, tag):
     def _cb():
         for k, v in ns.items():
             result = client(action='put_kv', key=k, value=v)
-            print('put_kv "{}" = "{}" -> {}'.format(k, v, result.get('result')))
+            _output('put_kv "{}" = "{}" -> {}'.format(k, v, result.get('result')))
 
     return _cb
 
 
 def _on_placements_ready(client, deployment_id, cb):
     while not _allocations_placed(client, deployment_id):
-        print('Deployment is still running, waiting for allocations to be placed...')
+        _output('Deployment is still running, waiting for allocations to be placed...')
         time.sleep(10)
         continue
 
@@ -391,9 +396,9 @@ def place_allocations(target_env, target_job, target_task, container_tag, lambda
         deployment_id = _queue_job(lambda_client, job_spec.get('Job'), modification_index)
         if deployment_id is not None and deployment_id != "":
             _on_placements_ready(lambda_client, deployment_id, _update_active_ref)
-            print('All allocations are in place, you can promote the deployment now')
+            _output('All allocations are in place, you can promote the deployment now')
         else:
-            print('Deployment successful')
+            _output('Deployment successful')
 
 
 def _latest_deployment_id(client, job_id):
