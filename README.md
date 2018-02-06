@@ -1,7 +1,6 @@
 # drone-nomad
 
 A Drone plugin to facilitate Nomad job deployment.
-This is an experiment, do not use it for anything you consider important.
 
 ## Components
 
